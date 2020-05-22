@@ -1,6 +1,7 @@
 const React = require('react');
 const ReactDOM = require('react-dom');
 const hat = require('hat');
+const io = require('socket.io-client');
 
 class Lobby extends React.Component {
   constructor(props) {
@@ -17,8 +18,8 @@ class Lobby extends React.Component {
     this.handleReadyChange = this.handleReadyChange.bind(this);
   }
 
-  handleClueChange() {
-    this.props.onClueChange(this.state.clues);
+  handleClueChange(clues) {
+    this.props.onClueChange(clues);
   }
 
   handleNameChange(event) {
@@ -29,8 +30,9 @@ class Lobby extends React.Component {
   handleSubmit(event) {
     let clues = this.state.clues.slice();
     clues.push(event.target.clue.value.trim());
+    this.handleClueChange(clues);
     this.setState({clues: clues});
-    this.handleClueChange();
+    event.target.clue.value = '';
     event.preventDefault();
   }
 
@@ -43,18 +45,21 @@ class Lobby extends React.Component {
     let clues = this.state.clues.slice();
     if ((index >= 0) && (index < clues.length))
       clues.splice(index, 1);
+    this.handleClueChange(clues);
     this.setState({clues: clues});
-    this.handleClueChange();
     event.preventDefault();
   }
 
   render() {
     return (
-      <form onSubmit={this.handleSubmit}>
+      <div>
+      <form onSubmit={(e) => { return e.preventDefault(); }}>
         <label>
           Your name:
           <input type="text" value={this.state.name} onChange={this.handleNameChange} disabled={this.state.ready ? 'disabled' : ''}/>
         </label>
+      </form>
+      <form onSubmit={this.handleSubmit}>
         <label>
           Add a clue:
           <input type="text" name="clue" disabled={this.state.ready ? 'disabled' : ''} />
@@ -66,6 +71,7 @@ class Lobby extends React.Component {
           <input type="checkbox" onChange={this.handleReadyChange} />
         </label>
       </form>
+      </div>
    );
   }
 }
@@ -80,10 +86,9 @@ function Player(props) {
 class TeamList extends React.Component {
   constructor(props) {
     super(props);
-    this.props.score = this.props.score || false;
   }
-  
-  render() {   
+
+  render() {
     const clueCount = {};
     const teams = [];
     teams.push({
@@ -94,21 +99,26 @@ class TeamList extends React.Component {
       name: this.props.teamNames[1],
       players: []
     });
-    this.props.players.forEach(p => {
-      teams[p.team].push(p);
+    this.props.players.forEach((p) => {
+      teams[p.team].players.push(p);
 
-      if (!this.props.showClues)
+      if (!this.props.showClues) {
         clueCount[p.playerId] = '';
-      else
-        clueCount[p.playerId] = '(' + this.props.clues.filter(c => c.playerId === p.playerId).length + ')';
+      }
+      else {
+        const playerClues = this.props.clues.filter((c) => { return c.playerId === p.playerId; });
+        clueCount[p.playerId] = ' (' + playerClues.length + ' clues)';
+      }
     });
 
-    return teams.map((t, i) => {(
-      <div>
-        <h3>{t.name}{this.props.score ? '- (' + this.props.score[i] + ')' : ''}</h3>
-        <ul>{t.players.map(p => { <li key={p.playerId}>{p.name}{clueCount[p.playerId]}</li> })}</ul>
+
+    const teamOut = teams.map((t, i) => { return (
+      <div key={i}>
+        <h3>{t.name}{this.props.score ? '- (' + this.props.score + ')' : ''}</h3>
+        <ul>{t.players.map((p) => { return <li key={p.playerId}>{p.name}{clueCount[p.playerId]}</li> })}</ul>
       </div>
     )});
+    return <div className="teamList">{teamOut}</div>;
   }
 }
 
@@ -119,22 +129,33 @@ class App extends React.Component {
       inLobby: true,
       playerId: localStorage.playerId,
       playerName: localStorage.playerName,
-      players: [{ id: localStorage.playerId, name: '', team: 0 }],
+      players: [{ playerId: localStorage.playerId, name: 'unnamed', team: 0 }],
       teamNames: ['Red', 'Blue'],
+      score: [0, 0],
       clues: [],
       gameState: props.gameState
     };
-    
+
     this.onNameChange = this.onNameChange.bind(this);
     this.onClueChange = this.onClueChange.bind(this);
     this.onTurnStart = this.onTurnStart.bind(this);
     this.onWSEvent = this.onWSEvent.bind(this);
     this.onReady = this.onReady.bind(this);
+
+    this.socket = io('http://127.0.0.1:3000');
+    this.socket.on('connect', function(){ console.log('connected'); });
+    this.socket.on('event', this.onWSEvent);
+    this.socket.on('disconnect', function(){ console.log('disconnected'); });
   }
 
   onNameChange(name) {
     localStorage.playerName = name;
-    this.setState({playerName: name});
+    const players = this.state.players.slice();
+    for(let i = 0; i < players.length; i++) {
+      if (players[i].playerId === this.state.playerId)
+        players[i].name = name;
+    }
+    this.setState({ players: players, playerName: name});
     // @TODO: send ws event
   }
 
@@ -148,7 +169,7 @@ class App extends React.Component {
 
   }
 
-  onWSEvent() {
+  onWSEvent(data) {
     /*
     ALL_READY
     PLAYER_NAME_CHANGE
@@ -167,27 +188,27 @@ class App extends React.Component {
   onReady() {
     // @TODO: send ready status
   }
-  
+
   render() {
     let content;
-    if (this.state.inLobby) 
+    if (this.state.inLobby) {
       content = (
         <div>
           <Lobby onNameChange={this.onNameChange} onClueChange={this.onClueChange} onReady={this.onReady} />
-          <TeamList showClues={true} clues={this.state.clues} teamNames={this.state.teamNames} players={this.state.players} />
+          <TeamList showClues={true} clues={this.state.clues} teamNames={this.state.teamNames} score={false} players={this.state.players} />
         </div>
       );
-    else
+    }
+    else {
       content = (
         <div>
           <TeamList showClues={false} teamNames={this.state.teamNames} players={this.state.players} score={this.state.score} />
         </div>
       )
-      content = this.props.gameState.teams.map(t => <Team id={t.id} name={t.name} players={t.players} key={t.id} />);
-
+    }
     return (
       <div className="App">
-        { content } 
+        { content }
       </div>
     );
   }
