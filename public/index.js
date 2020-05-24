@@ -147,14 +147,18 @@ class App extends React.Component {
     this.onNameChange = this.onNameChange.bind(this);
     this.onClueChange = this.onClueChange.bind(this);
     this.onTurnStart = this.onTurnStart.bind(this);
-    this.onWSEvent = this.onWSEvent.bind(this);
+    this.onWSConnect = this.onWSConnect.bind(this);
+    this.onWSDisconnect = this.onWSDisconnect.bind(this);    
     this.onReady = this.onReady.bind(this);
     this.onTeamChange = this.onTeamChange.bind(this);
+    this.wrapMessage = this.wrapMessage.bind(this);
+    this.getPlayer = this.getPlayer.bind(this);
+    this.onPlayerChange = this.onPlayerChange.bind(this)
 
     this.socket = io('http://127.0.0.1:3000');
-    this.socket.on('connect', function(){ console.log('connected'); });
-    this.socket.on('event', this.onWSEvent);
-    this.socket.on('disconnect', function(){ console.log('disconnected'); });
+    this.socket.on('connect', this.onWSConnect);
+    this.socket.on('PLAYER_CHANGE', this.onPlayerChange);
+    this.socket.on('disconnect', this.onWSDisconnect);
   }
 
   playerUpdate(players, playerId, field, value) {
@@ -165,15 +169,23 @@ class App extends React.Component {
     return players;
   }
 
+  wrapMessage(message) {
+    return { sender: this.playerId, message: message };
+  }
+
+  getPlayer() {
+    return this.state.players.filter((p) => { return p.playerId === this.state.playerId; })[0];
+  }
+
   onNameChange(name) {
     localStorage.playerName = name;
     this.setState({ players: this.playerUpdate(this.state.players.slice(), this.state.playerId, 'name', name) });
-    // @TODO: send ws event
+    this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
   }
 
   onTeamChange(teamId) {
     this.setState({ players: this.playerUpdate(this.state.players.slice(), this.state.playerId, 'teamId', teamId) });
-    // @TODO: send ws event
+    this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
   }
 
   onClueChange(clues) {
@@ -184,53 +196,71 @@ class App extends React.Component {
 
   onReady(ready) {
     this.setState({ players: this.playerUpdate(this.state.players.slice(), this.state.playerId, 'ready', ready) });
-    // @TODO: send ready signal
+    this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
   }
 
   onTurnStart() {
 
   }
 
-  onWSEvent(data) {
+  onWSConnect() {
+    console.log('connected');
+    this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
+  }
+
+  onPlayerChange(message) {
+    const players = this.state.players.slice();
+    // overwrite current player list with what we received by matching IDs
+    for(let i = 0; i < players.length; i++) {
+      if (message.players[players[i].playerId]) {
+        const playerId = players[i].playerId;
+        players[i] = message.players[playerId];
+        delete message.players[playerId];
+      }
+    }
+    // add unmatched players
+    Object.keys(message.players).forEach((playerId) => {
+      players.push(message.players[playerId]);
+    });
+    this.setState({ players: players });
+  }
+
     /*
     ALL_READY
+    PLAYER_ADD
+    PLAYER_REMOVE
     PLAYER_CHANGE (name or team or ready)
     TEAM_CHANGE (score or name)
-    NEW_PLAYER
-    LOST_PLAYER
-    CLUE_LIST_UPDATE
-    PLAYER_START
-    PLAYER_END
+    CLUE_UPDATE
+    PLAYER_START_TURN
+    PLAYER_END_TURN
     ROUND_START
     ROUND_END
     */
+
+
+  onWSDisconnect() {
+
   }
 
 
-  render() {
+  render() {    
     const player = this.state.players.filter((p) => { return p.playerId === this.state.playerId})[0];
-
-    let content;
-    if (this.state.inLobby) {
-      content = (
-        <div>
+    if (this.state.round === 0) {
+      return (
+        <div className="App">
           <Lobby onNameChange={this.onNameChange} onTeamChange={this.onTeamChange} onClueChange={this.onClueChange} onReady={this.onReady} teams={this.state.teams} player={player} />
           <TeamList showClues={true} showScore={false} clues={this.state.clues} teams={this.state.teams} players={this.state.players} />
         </div>
       );
     }
     else {
-      content = (
-        <div>
+      return (
+        <div className="App">
           <TeamList showClues={false} showScore={true} teams={this.state.teams} players={this.state.players}  />
         </div>
       )
     }
-    return (
-      <div className="App">
-        { content }
-      </div>
-    );
   }
 }
 

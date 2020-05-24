@@ -12,12 +12,13 @@ server.listen(port, function () {
   app.use(express.static('public'));
   
   // Chatroom
+  var players = {};
   
   var numUsers = 0;
   
   io.on('connection', function (socket) {
     var addedUser = false;
-  
+
     // when the client emits 'new message', this listens and executes
     socket.on('new message', function (data) {
       // we tell the client to execute 'new message'
@@ -25,6 +26,14 @@ server.listen(port, function () {
         username: socket.username,
         message: data
       });
+    });
+
+    socket.on('PLAYER_CHANGE', (data) => {
+        const sender = data.sender;
+        const player = data.message;                
+        players[player.playerId] = player;
+        players[player.playerId].lastSeen = +new Date();
+        io.emit('PLAYER_CHANGE', { source: sender, players: players });
     });
   
     // when the client emits 'add user', this listens and executes
