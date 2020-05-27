@@ -100,7 +100,7 @@ class TeamList extends React.Component {
   render() {
     const clueCount = {};
     this.props.players.forEach((p) => {
-      if (!this.props.showClues) {
+      if (this.props.round > 0) {
         clueCount[p.playerId] = '';
       }
       else {
@@ -112,7 +112,7 @@ class TeamList extends React.Component {
     const teamOut = this.props.teams.map((t) => {
       return (
       <div key={t.teamId}>
-        <h3>{t.name}{this.props.showScore ? '- (' + t.score + ')' : ''}</h3>
+        <h3>{t.name}{this.props.round > 0 ? '- (' + t.score + ')' : ''}</h3>
         <ul>{
           this.props.players
             .filter((p) => { return p.teamId === t.teamId; })
@@ -124,19 +124,68 @@ class TeamList extends React.Component {
   }
 }
 
+class GameBoard extends React.Component {
+  constructor(props) {
+    super(props);
+
+    this.state = {
+      skips: 0
+    };
+
+    this.startTurn = this.startTurn.bind(this);
+    this.scoreClue = this.scoreClue.bind(this);
+    this.skipClue = this.skipClue.bind(this);
+    this.skipTurn = this.skipTurn.bind(this);
+  }
+
+  startTurn() {
+
+  }
+
+  scoreClue() {
+
+  }
+
+  skipClue() {
+
+  }
+
+  skipTurn() {
+
+  }
+
+  render() {
+    const clue = (this.props.activeClue !== null) && this.props.clues.filter(c => c.clueId === this.props.activeClue)[0];
+    if (this.props.whoseTurnIsIt === this.props.playerId) {
+      if (clue) {
+        return <div><div id="timer"></div><div id="clue">{clue}</div><div><input type="button" text="GOT IT" onClick={this.scoreClue} /><input type="button" onClick={this.skipClue} /></div></div>
+      }
+      else {
+        return <div><input type="button" text="START TURN" onClick={this.startTurn} /><input type="button" text="Skip me" onClick={this.skipTurn} /></div>
+      }
+    }
+    else {
+      return <div>{this.props.players[this.props.currentPlayer].name}'s turn</div>;
+    }
+  }
+}
+
 class App extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
       inLobby: true,
       round: 0,
+      whoseTurnIsIt: null,
+      activeClue: null,
       playerId: localStorage.playerId,
       players: [{
         playerId: localStorage.playerId,
         name: localStorage.playerName,
         teamId: 'team-0' ,
         ready: false,
-        active: true
+        active: true,
+        turn: 0
       }],
       teams: [
         {name: 'Red', color: '#ffaaaa', teamId: 'team-0', score: 0},
@@ -149,7 +198,7 @@ class App extends React.Component {
     this.onClueChange = this.onClueChange.bind(this);
     this.onTurnStart = this.onTurnStart.bind(this);
     this.onWSConnect = this.onWSConnect.bind(this);
-    this.onWSDisconnect = this.onWSDisconnect.bind(this);    
+    this.onWSDisconnect = this.onWSDisconnect.bind(this);
     this.onReady = this.onReady.bind(this);
     this.onPlayerTeamChange = this.onPlayerTeamChange.bind(this);
     this.wrapMessage = this.wrapMessage.bind(this);
@@ -158,12 +207,14 @@ class App extends React.Component {
     this.onWSPlayerChange = this.onWSPlayerChange.bind(this)
     this.onWSClueChange = this.onWSClueChange.bind(this);
     this.onWSTeamChange = this.onWSTeamChange.bind(this);
+    this.onWSRoundSet = this.onWSRoundSet.bind(this);
 
     this.socket = io('http://127.0.0.1:3000');
     this.socket.on('connect', this.onWSConnect);
     this.socket.on('PLAYER_CHANGE', this.onWSPlayerChange);
     this.socket.on('TEAM_CHANGE', this.onWSTeamChange);
     this.socket.on('CLUE_CHANGE', this.onWSClueChange);
+    this.socket.on('ROUND_SET', this.onWSRoundSet);
     this.socket.on('disconnect', this.onWSDisconnect);
   }
 
@@ -243,7 +294,7 @@ class App extends React.Component {
       players.push(message.players[playerId]);
     });
 
-    this.setState({ players: players });
+    this.setState({players: players});
   }
 
   onWSClueChange(message) {
@@ -268,7 +319,11 @@ class App extends React.Component {
     // delete any orphaned clues
     clues = clues.filter(c => (incomingClueIds.indexOf(c.clueId) !== -1) || (c.playerId === this.state.playerId));
 
-    this.setState({ clues: clues });
+    this.setState({clues: clues});
+  }
+
+  onWSRoundSet(message) {
+    this.setState({round: message.round});
   }
 
   onWSTeamChange(message) {
@@ -279,7 +334,7 @@ class App extends React.Component {
       teams[i] = message.teams[teams[i].teamId];
     }
 
-    this.setState({ teams: teams });
+    this.setState({teams: teams});
   }
 
   /*
@@ -289,33 +344,33 @@ class App extends React.Component {
   >PLAYER_CHANGE (name or team or ready)
   >TEAM_CHANGE (score or name)
   >CLUE_CHANGE
+  >ROUND_SET
   PLAYER_START_TURN
   PLAYER_END_TURN
   ROUND_START
   ROUND_END
   */
 
-
   onWSDisconnect() {
 
   }
 
 
-  render() {    
+  render() {
     const player = this.state.players.filter((p) => { return p.playerId === this.state.playerId})[0];
     if (this.state.round === 0) {
       return (
         <div className="App">
           <Lobby onNameChange={this.onNameChange} onPlayerTeamChange={this.onPlayerTeamChange} onClueChange={this.onClueChange} onReady={this.onReady} teams={this.state.teams} player={player} />
-          <TeamList showClues={true} showScore={false} clues={this.state.clues} teams={this.state.teams} players={this.state.players} />
+          <TeamList round={this.state.round} clues={this.state.clues} teams={this.state.teams} players={this.state.players} />
         </div>
       );
     }
     else {
       return (
         <div className="App">
-          <TeamList showClues={false} showScore={true} teams={this.state.teams} players={this.state.players}  />
-          {/* <GameBoard /> */}
+          <TeamList round={this.state.round} teams={this.state.teams} players={this.state.players}  />
+          <GameBoard players={this.state.players} playerId={this.state.playerId} clues={this.state.clues} round={this.state.round} whoseTurnIsIt={this.state.whoseTurnIsIt} activeClue={this.state.activeClue} />
         </div>
       )
     }
