@@ -112,11 +112,18 @@ class TeamList extends React.Component {
     const teamOut = this.props.teams.map((t) => {
       return (
       <div key={t.teamId}>
-        <h3>{t.name}{this.props.round > 0 ? '- (' + t.score + ')' : ''}</h3>
+        <h3>{t.name}{this.props.round > 0 ? `- ${t.score}` : ''}</h3>
         <ul>{
           this.props.players
             .filter((p) => { return p.teamId === t.teamId; })
-            .map((p) => { return <li key={p.playerId} className={p.active ? 'player active' : 'player inactive'}>{p.ready ? '✔️' : '⏳'} {p.name}{clueCount[p.playerId]}</li> })
+            .map((p) => {
+              const cls = ['player', 'round-' + this.props.round, p.active ? 'active' : 'inactive'];
+              if (this.props.whoseTurnIsIt && this.props.whoseTurnIsIt === p.playerId)
+                cls.push('its-their-turn');
+              return (<li key={p.playerId} className={cls.join(' ')}>
+                <span className="readiness">{p.ready ? '✔️' : '⏳'} </span>{p.name}{clueCount[p.playerId]}
+              </li>);
+            })
         }</ul>
       </div>
     )});
@@ -369,7 +376,7 @@ class App extends React.Component {
     else {
       return (
         <div className="App">
-          <TeamList round={this.state.round} teams={this.state.teams} players={this.state.players}  />
+          <TeamList round={this.state.round} teams={this.state.teams} players={this.state.players} whoseTurnIsIt={this.state.whoseTurnIsIt} />
           <GameBoard players={this.state.players} playerId={this.state.playerId} clues={this.state.clues} round={this.state.round} whoseTurnIsIt={this.state.whoseTurnIsIt} activeClue={this.state.activeClue} />
         </div>
       )
