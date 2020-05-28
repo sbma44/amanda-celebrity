@@ -20,14 +20,19 @@ var clues = {};
 var timeouts = {};
 var numUsers = 0;
 var round = 0;
+var whoseTurnIsIt = null;
+var activeClue = null;
 
 io.on('connection', function (socket) {
-  var addedUser = false;
 
   // on connection, catch the user up (players unnecessary; client initiates that event to share its data)
-  socket.emit('ROUND_SET', { source: null, round: round });
+  const roundState = { source: null, round: round };
+  if (whoseTurnIsIt)
+    roundState.whoseTurnIsIt = whoseTurnIsIt;
+  socket.emit('ROUND_SET', roundState);
   socket.emit('TEAM_CHANGE', { source: null, teams: teams });
   socket.emit('CLUE_CHANGE', { source: null, clues: clues });
+  socket.emit('PLAYER_CHANGE', { source: null, players: players });
 
   socket.on('PLAYER_CHANGE', (data) => {
     const sender = data.sender;
@@ -38,6 +43,7 @@ io.on('connection', function (socket) {
 
     // @TODO: move this to a setInterval task
     // prune inactive players
+    const deleteMe = [];
     Object.keys(players).forEach(playerId => {
       if (!players[playerId].active && (players[playerId].lastSeen < (+new Date() - (5 * 60 * 1000))))
         delete players[playerId];
@@ -49,14 +55,27 @@ io.on('connection', function (socket) {
     if (!timeouts.PLAYER_CHANGE) {
       setTimeout(((s) => {
         // if everyone's ready, increment the round and start the game!
-        if ((round === 0) && (players.all(p => p.ready))) {
+        if ((round === 0) && (Object.keys(players).every(p => players[p].ready))) {
           // mark all clues as unused
           Object.keys(clues).forEach(clueId => {
             clues[clueId].count = 0;
           });
           round = 1;
-          io.emit('ROUND_SET', { source: s, round: round });
+
+          // initial player should be first player from team 0
+          const data = {source: s, round: round};
+          if (Object.keys(teams).length > 0) {
+            const firstTeam = Object.keys(teams).sort()[0];
+            const wtii = Object.values(players).filter(p => p.teamId === firstTeam).sort((a, b) => a.playerId < b.playerId)[0];
+            if (wtii) {
+              whoseTurnIsIt = wtii.playerId;
+              data.whoseTurnIsIt = whoseTurnIsIt;
+              data.activeClue = activeClue;
+            }
+          }
+          io.emit('ROUND_SET', data);
         }
+
         io.emit('PLAYER_CHANGE', { source: s, players: players });
         timeouts.PLAYER_CHANGE = false;
       }).bind(this, sender), TIC);
@@ -65,9 +84,10 @@ io.on('connection', function (socket) {
 
   socket.on('TEAM_CHANGE', (data) => {
     const sender = data.sender;
-    const team = data.message;
-    teams[team.teamId] = team;
-    teams[team.teamId].lastSeen = +new Date();
+    data.message.forEach(t => {
+      teams[t.teamId] = t;
+      teams[t.teamId].lastSeen = +new Date();
+    });
     if (!timeouts.TEAM_CHANGE) {
       setTimeout(((s) => {
         io.emit('TEAM_CHANGE', { source: s, teams: teams });
@@ -110,9 +130,40 @@ io.on('connection', function (socket) {
     }
   });
 
+  socket.on('START_TURN', (data) => {
+    const playerId = data.sender;
+    // pick next clue
+  });
+
+  socket.on('NEXT_CLUE', (data) => {
+    const sender = data.sender;
+    const gotIt = data.message;
+    if (gotIt) {
+      // score for team, send team update
+    }
+    // pick next clue
+  });
+
+  socket.on('SKIP_TURN', (data) => {
+    // find next player on the same turn and set whoseTurnIsIt to them, update w/ ROUND_SET
+    const playerId = data.sender;
+    const eligiblePlayerIds = Object.values(players)
+      .filter(p => p.teamId === players[playerId].teamId)
+      .map(p => p.playerId)
+      .sort((a, b) => a < b)
+
+    const currentidx = eligiblePlayerIds.indexOf(playerId);
+    if (currentidx >= 0) {
+      whoseTurnIsIt = eligiblePlayerIds[(currentidx + 1) % eligiblePlayerIds.length];
+      activeClue = null;
+      io.emit('ROUND_SET', {round: round, whoseTurnIsIt: whoseTurnIsIt, activeClue: activeClue});
+    }
+  });
+
   // when the user disconnects.. perform this
   socket.on('disconnect', function () {
-    players[socket.playerId].active = false;
+    if (players[socket.playerId])
+      players[socket.playerId].active = false;
     if (!timeouts.PLAYER_CHANGE) {
       setTimeout(((s) => {
         io.emit('PLAYER_CHANGE', { source: s, players: players });
