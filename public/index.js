@@ -3,6 +3,8 @@ const ReactDOM = require('react-dom');
 const hat = require('hat');
 const io = require('socket.io-client');
 
+const testMode = /fresh-user-(\d)/;
+
 class Lobby extends React.Component {
   constructor(props) {
     super(props);
@@ -87,7 +89,7 @@ class Lobby extends React.Component {
         } </ul>
         <label>
           Ready?
-          <input type="checkbox" onChange={this.handleReadyChange} />
+          <input type="checkbox" onChange={this.handleReadyChange} checked={this.props.player.ready}/>
         </label>
       </form>
       </div>
@@ -119,6 +121,7 @@ class TeamList extends React.Component {
         <ul>{
           this.props.players
             .filter((p) => { return p.teamId === t.teamId; })
+            .sort((a, b) => a.playerId < b.playerId)
             .map((p) => {
               const cls = ['player', `round-${this.props.round}`, p.active ? 'active' : 'inactive'];
               if (this.props.whoseTurnIsIt && this.props.whoseTurnIsIt === p.playerId)
@@ -139,11 +142,19 @@ class GameBoard extends React.Component {
     super(props);
 
     this.state = {
-      skips: this.props.skips
+      skips: this.props.skips,
+      timerStart: null,
+      remaining: 0
     };
 
     this.scoreClue = this.scoreClue.bind(this);
     this.skipClue = this.skipClue.bind(this);
+    this.startTurn = this.startTurn.bind(this);
+  }
+
+  componentWillUnmount() {
+    if(this.timer)
+      clearInterval(this.timer);
   }
 
   scoreClue() {
@@ -158,16 +169,47 @@ class GameBoard extends React.Component {
     }
   }
 
+  startTurn() {
+    this.props.startTurn(this.startTimer.bind(this));
+  }
+
+  startTimer() {
+    console.log('startTimer fired');
+    this.setState({ timerStart: +new Date() });
+    this.timer = setInterval(this.tick.bind(this), 100);
+  }
+
+  tick() {
+    let remaining = Math.max(0, 60 - ((+new Date() - this.state.timerStart) / 1000.0));
+    this.setState({remaining: remaining});
+    if (remaining === 0) {
+      clearInterval(this.timer);
+      this.props.endTurn();
+    }
+  }
+
   render() {
     let whoseTurnIsIt = this.props.whoseTurnIsIt && this.props.players.filter(p => p.playerId === this.props.whoseTurnIsIt);
     whoseTurnIsIt = whoseTurnIsIt && whoseTurnIsIt.length > 0 ? `${whoseTurnIsIt[0].name}'s turn` : 'idk whose turn it is';
-    const clue = (this.props.activeClue !== null) && this.props.clues.filter(c => c.clueId === this.props.activeClue)[0];
+    const clue = this.props.activeClueId ? this.props.clues.filter(c => (c.clueId === this.props.activeClueId))[0] : false;
+    const remainingSkips = `skip (${this.state.skips} remain)`;
     if (this.props.whoseTurnIsIt === this.props.playerId) {
       if (clue) {
-        return <div><div id="timer"></div><div id="clue">{clue}</div><div><input type="button" text="GOT IT" onClick={this.scoreClue} /><input type="button" onClick={this.skipClue} disabled={this.state.skips > 0 ? '' : 'disabled'} /></div></div>
+        return (<div>
+          <div id="timer">{this.state.remaining.toFixed(1)}</div>
+          <div id="clue">{clue.clue}</div>
+          <div>
+            <input type="button" value="GOT IT" onClick={this.scoreClue} />
+            <input type="button" value={remainingSkips} onClick={this.skipClue} disabled={this.state.skips > 0 ? '' : 'disabled'} />
+          </div>
+        </div>);
       }
       else {
-        return <div><h2>It's your turn!</h2><input type="button" value="START TURN" onClick={this.props.startTurn} /> <input type="button" value="Skip me" onClick={this.props.skipTurn} /></div>
+        return (<div>
+          <h2>It's your turn!</h2>
+          <input type="button" value="START TURN" onClick={this.startTurn} />
+          <input type="button" value="Skip me" onClick={this.props.skipTurn} />
+        </div>);
       }
     }
     else {
@@ -183,21 +225,19 @@ class App extends React.Component {
       inLobby: true,
       round: 0,
       whoseTurnIsIt: null,
-      activeClue: null,
-      playerId: localStorage.playerId,
+      activeClueId: null,
+      playerId: window.playerId,
       players: [{
-        playerId: localStorage.playerId,
-        name: localStorage.playerName,
+        playerId: window.playerId,
+        name: window.playerName,
         teamId: 'team-0',
         ready: false,
         active: true,
         turn: 0
       }],
-      teams: [
-        {name: 'Red', color: '#ffaaaa', teamId: 'team-0', score: 0},
-        {name: 'Blue', color: '#aaaaff', teamId: 'team-1', score: 0}
-      ],
-      clues: []
+      teams: [],
+      clues: [],
+      heartbeat: false
     };
 
     // convenience
@@ -215,12 +255,15 @@ class App extends React.Component {
     // gameboard
     this.nextClue = this.nextClue.bind(this);
     this.startTurn = this.startTurn.bind(this);
+    this.endTurn = this.endTurn.bind(this);
     this.skipTurn = this.skipTurn.bind(this);
 
     // ws
     this.socket = io('http://127.0.0.1:3000');
     this.socket.on('connect', this.onWSConnect);
     this.socket.on('disconnect', this.onWSDisconnect);
+    this.onWSInit = this.onWSInit.bind(this);
+    this.socket.on('INIT', this.onWSInit);
     this.onWSPlayerChange = this.onWSPlayerChange.bind(this)
     this.socket.on('PLAYER_CHANGE', this.onWSPlayerChange);
     this.onWSClueChange = this.onWSClueChange.bind(this);
@@ -229,7 +272,11 @@ class App extends React.Component {
     this.socket.on('TEAM_CHANGE', this.onWSTeamChange);
     this.onWSRoundSet = this.onWSRoundSet.bind(this);
     this.socket.on('ROUND_SET', this.onWSRoundSet);
+  }
 
+  componentWillUnmount() {
+    if (this.heartbeat)
+      clearInterval(this.heartbeat);
   }
 
   playerUpdate(players, playerId, field, value) {
@@ -241,17 +288,23 @@ class App extends React.Component {
   }
 
   wrapMessage(message) {
-    return { sender: this.state.playerId, message: message };
+    return { sender: this.state.playerId, message: message || null };
   }
 
   getPlayer() {
-    const p = this.state.players.filter((p) => { return p.playerId === this.state.playerId; })[0];
-    p.active = true; // always mark ourselves active
-    return p;
+    const p = this.state.players.filter((p) => { return p.playerId === this.state.playerId; });
+    if (p && p.length > 0) {
+      p[0].active = true; // always mark ourselves active
+      return p[0];
+    }
+    else {
+      return null;
+    }
   }
 
   onNameChange(name) {
-    localStorage.playerName = name;
+    if (!testMode.test(location.href))
+      localStorage.playerName = name;
     this.setState({ players: this.playerUpdate(this.state.players.slice(), this.state.playerId, 'name', name) });
     this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
   }
@@ -282,31 +335,58 @@ class App extends React.Component {
     this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
   }
 
-  startTurn() {
-    this.socket.emit('START_TURN', this.wrapMessage({}));
+  startTurn(callback) {
+    this.startTurnCallback = callback;
+    this.socket.emit('START_TURN', this.wrapMessage());
+  }
+
+  endTurn() {
+    this.socket.emit('END_TURN', this.wrapMessage());
   }
 
   nextClue(gotIt) {
-    this.socket.emit('NEXT_CLUE', this.wrapMessage(gotIt));
+    this.socket.emit('NEXT_CLUE', this.wrapMessage({gotIt: gotIt, clueId: this.state.activeClueId}));
   }
 
   skipTurn() {
-    this.socket.emit('SKIP_TURN', this.wrapMessage({}));
+    this.socket.emit('SKIP_TURN', this.wrapMessage());
   }
 
   // === WEBSOCKET EVENT HANDLERS ===
 
   onWSConnect() {
-    console.log('connected');
+    this.socket.emit('HELLO', this.wrapMessage());
+    let hb = (() => { this.socket.emit('HEARTBEAT', this.wrapMessage())}).bind(this);
+    this.heartbeat = setInterval(hb, 2000);
+  }
 
-    const sendPlayerInASec = () => {
-      this.socket.emit('PLAYER_CHANGE', this.wrapMessage(this.getPlayer()));
+  onWSInit(gameState) {
+    const newState = {
+      round: gameState.round,
+      whoseTurnIsIt: gameState.whoseTurnIsIt,
+      activeClueId: gameState.activeClueId,
+      clues: Object.values(gameState.clues),
+      teams: Object.values(gameState.teams),
+      players: Object.values(gameState.players)
     };
-    setTimeout(sendPlayerInASec.bind(this), 1000);
+
+    // add ourselves if the server doesn't yet have us
+    if (!gameState.players[this.state.playerId]) {
+      const player = this.getPlayer();
+      if (player) {
+        newState.players.push(player)
+        this.socket.emit('PLAYER_CHANGE', this.wrapMessage(player));
+      }
+    }
+
+    this.setState(newState);
   }
 
   onWSPlayerChange(message) {
-    const players = this.state.players.slice();
+    let players = this.state.players.slice();
+
+    // delete any pruned players (except ourselves)
+    const pruned = Object.values(message.players).filter(p => p.playerId !== this.state.playerId && p.prune).map(p => p.playerId);
 
     // overwrite current player list with what we received by matching IDs
     for(let i = 0; i < players.length; i++) {
@@ -321,8 +401,15 @@ class App extends React.Component {
       players.push(message.players[playerId]);
     });
 
+    // prune & sort
+    players = players
+      .filter(p => pruned.indexOf(p.playerId) === -1)
+      .sort((a, b) => a.playerId < b.playerId);
+
+    console.log('===onWSPlayerChange===', message, JSON.stringify(players, null, 2));
+
     // sort players
-    this.setState({players: players.sort((a, b) => a.playerId < b.playerId)});
+    this.setState({players: players});
   }
 
   onWSClueChange(message) {
@@ -351,10 +438,21 @@ class App extends React.Component {
   }
 
   onWSRoundSet(message) {
-    const newState = {round: message.round};
-    if (message.whoseTurnIsIt)
-      newState.whoseTurnIsIt = message.whoseTurnIsIt;
-    this.setState(newState);
+    console.log('got ROUND_SET');
+    const lastRound = this.state.round;
+    console.log(message);
+    this.setState(message);
+
+    // call the timer start upon receipt of the clue change
+    if (this.startTurnCallback) {
+      console.log('firing callback');
+      this.startTurnCallback();
+      this.startTurnCallback = false;
+    }
+
+    // @TODO: trigger animation on round change
+    // if (newState.round !== lastRound) {
+    // }
   }
 
   onWSTeamChange(message) {
@@ -396,9 +494,10 @@ class App extends React.Component {
             clues={this.state.clues}
             round={this.state.round}
             whoseTurnIsIt={this.state.whoseTurnIsIt}
-            activeClue={this.state.activeClue}
+            activeClueId={this.state.activeClueId}
             skips={3 - this.state.round}
             startTurn={this.startTurn}
+            endTurn={this.endTurn}
             nextClue={this.nextClue}
             skipTurn={this.skipTurn}
             />
@@ -417,7 +516,17 @@ const annoyingWindowAnimation = window.setInterval(() => {
   document.title = title.slice(0, offset) + '_' + title.slice(offset + 1);
 }, ANIMATION_INTERVAL);
 
-localStorage.playerId = localStorage.playerId || hat();
-localStorage.playerName = localStorage.playerName || 'no name';
+// test users
+const names = 'Kriston Amanda Spencer Sommer Yglz Brian Jeff'.split(' ');
+if (testMode.test(location.href)) {
+  window.playerName = names[parseInt(location.href.match(testMode)[1])];
+  window.playerId = window.playerName;
+}
+else {
+  localStorage.playerId = localStorage.playerId || hat();
+  localStorage.playerName = localStorage.playerName || 'no name';
+  window.playerId = localStorage.playerId;
+  window.playerName = localStorage.playerName;
+}
 
 ReactDOM.render(<App />, document.getElementById('root'));
