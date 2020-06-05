@@ -222,12 +222,22 @@ io.on('connection', function (socket) {
     // increment this player's turn count
     gameState.players[playerId].turn += 1;
 
-    // if no eligible player, increment round
     if (nextPlayerId) {
       gameState.whoseTurnIsIt = nextPlayerId;
     }
     else {
-      gameState.round += 1;
+      // if no eligible player, check for remaining clues
+      const remainingClues = Object.values(gameState.clues).filter(clue => clue.used < gameState.round);
+
+      // if no remaining clues, advance the round
+      if (remainingClues.length == 0)
+        gameState.round += 1;
+
+      // either way, unify everyone's turn value and continue
+      gameState.players.forEach(playerId => {
+        gameState.players[playerId].turn = gameState.round - 1;
+      });
+      sendPlayerUpdate(data.sender);
       gameState.whoseTurnIsIt = nextPlayer(false);
     }
 

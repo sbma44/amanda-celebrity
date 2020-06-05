@@ -4,6 +4,7 @@ const hat = require('hat');
 const io = require('socket.io-client');
 
 const testMode = /fresh-user-(\d)/;
+const TURN_LENGTH = 20;
 
 class Lobby extends React.Component {
   constructor(props) {
@@ -180,7 +181,7 @@ class GameBoard extends React.Component {
   }
 
   tick() {
-    let remaining = Math.max(0, 60 - ((+new Date() - this.state.timerStart) / 1000.0));
+    let remaining = Math.max(0, TURN_LENGTH - ((+new Date() - this.state.timerStart) / 1000.0));
     this.setState({remaining: remaining});
     if (remaining === 0) {
       clearInterval(this.timer);
